@@ -1,10 +1,11 @@
+
 import cv2
 import numpy as np
 import sys
 import warnings
-from scipy.ndimage import convolve  # Updated import
+from scipy.ndimage import convolve  # Retain for Horn-Schunck algorithm computation
 
-def HornSchunck(im1, im2, alpha=0.0001, N=10):  # reduce N from 50 to 10 to speed up computation
+def HornSchunck(im1, im2, alpha=0.0001, N=10):
     HSFilter = np.array([[1/12, 1/6, 1/12],
                          [1/6,    0, 1/6],
                          [1/12, 1/6, 1/12]], float)
@@ -38,49 +39,23 @@ def computeDerivatives(im1, im2):
     ft = convolve(im1, np.ones((2, 2)) * 0.25) + convolve(im2, -np.ones((2, 2)) * 0.25)
     return fx, fy, ft
 
-def drawOpticalflow(img, U, V, step=15, threshold=500):  # Increase the step from 7 to 15 so fewer vectors are drawn
+def drawOpticalflow(img, U, V, step=15):
     h, w = img.shape[:2]
     y, x = np.mgrid[step/2:h:step, step/2:w:step].reshape(2, -1).astype(int)
     fx, fy = U[y, x], V[y, x]
-    
-    # Create lines from (x1, y1) to (x2, y2) for each flow vector
     lines = np.vstack([x, y, x+fx, y+fy]).T.reshape(-1, 2, 2)
     lines = np.int32(lines)
 
-    # Convert grayscale image to BGR to overlay lines
     vis = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-    
-    # Draw the red vectors (from start points to end points of the flow vectors)
     for (x1, y1), (x2, y2) in lines:
-        cv2.line(vis, (x1, y1), (x2, y2), (0, 0, 255), 2)  # Red color in BGR
-        cv2.circle(vis, (x1, y1), 1, (0, 255, 0), -1)  # Green circle at the starting point
-    
-    # Create a dynamic outline by drawing the boundary of the motion in yellow
-    contours = getMotionContours(U, V, threshold)
-    for contour in contours:
-        cv2.polylines(vis, [contour], isClosed=True, color=(0, 255, 255), thickness=2)  # Yellow outline
-    
+        cv2.line(vis, (x1, y1), (x2, y2), (0, 0, 255), 1)
+        cv2.circle(vis, (x1, y1), 1, (0, 255, 0), -1)
     return vis
-
-def getMotionContours(U, V, threshold=2):
-    """Generate contours of the moving objects based on flow vectors."""
-    # Compute the magnitude of the flow vectors
-    magnitude = np.sqrt(U**2 + V**2)
-    
-    # Mask to store moving regions
-    mask = np.zeros(U.shape, dtype=np.uint8)
-    
-    # Mark areas with significant motion (magnitude greater than threshold)
-    mask[magnitude > threshold] = 255
-    
-    # Find contours around the motion regions
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    return contours
 
 def main():
     if len(sys.argv) == 2:
         filename = sys.argv[1]
-        cap = cv2.VideoCapture(0)
+        cap = cv2.VideoCapture(filename)
 
         success, prev_frame = cap.read()
         if not success:
@@ -88,23 +63,36 @@ def main():
             cap.release()
             sys.exit()
 
-        prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
+        # Use CUDA for grayscale conversion
+        gpu_prev_frame = cv2.cuda_GpuMat()
+        gpu_prev_gray = cv2.cuda_GpuMat()
+        gpu_curr_frame = cv2.cuda_GpuMat()
+        gpu_curr_gray = cv2.cuda_GpuMat()
+
+        gpu_prev_frame.upload(prev_frame)
+        gpu_prev_gray = cv2.cuda.cvtColor(gpu_prev_frame, cv2.COLOR_BGR2GRAY)
 
         while True:
             success, frame = cap.read()
             if not success:
                 break
 
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            # Upload frame to GPU
+            gpu_curr_frame.upload(frame)
+            gpu_curr_gray = cv2.cuda.cvtColor(gpu_curr_frame, cv2.COLOR_BGR2GRAY)
+
+            # Download frames to CPU for Horn-Schunck computation
+            prev_gray = gpu_prev_gray.download()
+            curr_gray = gpu_curr_gray.download()
 
             # Compute optical flow
-            U, V = HornSchunck(prev_gray, gray)
-            vis = drawOpticalflow(gray, U, V)
+            U, V = HornSchunck(prev_gray, curr_gray)
+            vis = drawOpticalflow(curr_gray, U, V)
 
             # Display the result
             cv2.imshow("Horn-Schunck Optical Flow", vis)
 
-            prev_gray = gray  # Update for the next frame
+            gpu_prev_gray = gpu_curr_gray.clone()  # Update for the next frame
 
             # Quit on 'q' key
             if cv2.waitKey(1) & 0xFF == ord('q'):
