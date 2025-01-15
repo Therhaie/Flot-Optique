@@ -2,7 +2,8 @@ import cv2
 import numpy as np
 import sys
 import warnings
-from scipy.ndimage.filters import convolve
+# from scipy.ndimage.filters import convolve
+from scipy.ndimage import convolve
 
 
 desImage = None
