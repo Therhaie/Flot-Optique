@@ -1,5 +1,6 @@
 # Horn-Schunck-Algorithm
-This program is main designed to estimate the optical flow from the video input by user. 
+This program is main designed to estimate the optical flow from a video capture by the webcam of the computer.
+This program is based on this git repository : "https://github.com/sshen12/Horn-Schunck-Algorithm" 
 
 Horn Schunck
 ================
